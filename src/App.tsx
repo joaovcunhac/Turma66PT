@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Search, User, Users, Plus, ChevronRight, Star, Calendar, Trash2, ArrowLeft, Save, ClipboardList, UserCheck, Settings, Edit2, X, UserPlus, ShieldCheck, Download, Loader2 } from 'lucide-react';
+import { Search, User, Users, Plus, ChevronRight, Star, Calendar, Trash2, ArrowLeft, Save, ClipboardList, UserCheck, Settings, Edit2, X, UserPlus, ShieldCheck, Download, Loader2, HelpCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Student, Grade, GradingRule, SessionInfo } from './types';
 import { GRADING_RULES, MOCK_STUDENTS } from './constants';
+import { WelcomeModal } from './components/WelcomeModal';
 
 export default function App() {
   const [students, setStudents] = useState<Student[]>([]);
@@ -10,6 +11,7 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [isGradingModalOpen, setIsGradingModalOpen] = useState(false);
+  const [isWelcomeModalOpen, setIsWelcomeModalOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   
   // Session Setup State
@@ -30,6 +32,11 @@ export default function App() {
 
   // Load students from backend
   useEffect(() => {
+    const hasSeenWelcome = localStorage.getItem('hasSeenWelcome');
+    if (!hasSeenWelcome) {
+      setIsWelcomeModalOpen(true);
+    }
+
     const fetchStudents = async () => {
       try {
         const response = await fetch('/api/students');
@@ -229,6 +236,11 @@ export default function App() {
     linkElement.click();
   };
 
+  const closeWelcomeModal = () => {
+    setIsWelcomeModalOpen(false);
+    localStorage.setItem('hasSeenWelcome', 'true');
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#F5F5F7]">
@@ -319,6 +331,13 @@ export default function App() {
               title="Configurações da Sessão"
             >
               <Settings size={18} />
+            </button>
+            <button 
+              onClick={() => setIsWelcomeModalOpen(true)}
+              className="p-1.5 hover:bg-gray-200 rounded-lg text-[#86868B] transition-colors"
+              title="Instruções de Uso"
+            >
+              <HelpCircle size={18} />
             </button>
             {isAdmin && (
               <div className="flex items-center gap-2">
@@ -603,6 +622,11 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
+
+      <WelcomeModal 
+        isOpen={isWelcomeModalOpen} 
+        onClose={closeWelcomeModal} 
+      />
 
       {/* Grading Modal */}
       <AnimatePresence>
