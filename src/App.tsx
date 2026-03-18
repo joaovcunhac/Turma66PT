@@ -651,10 +651,16 @@ export default function App() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {/* Left Side: Criteria */}
                   <div className="space-y-4">
-                    <p className="text-sm font-semibold text-[#86868B] uppercase tracking-wider">Critérios (5 pontos)</p>
-                    {currentEval.map((val, idx) => (
+                    <p className="text-sm font-semibold text-[#86868B] uppercase tracking-wider">Critérios de Avaliação</p>
+                    {[
+                      'Pontualidade',
+                      'Organização',
+                      'Material/Biossegurança',
+                      'Conhecimento (Teórico, Prático)',
+                      'Execução do Procedimento'
+                    ].map((label, idx) => (
                       <div key={idx} className="flex items-center justify-between bg-[#F5F5F7] p-3 rounded-xl">
-                        <span className="font-medium text-sm">Critério {idx + 1}</span>
+                        <span className="font-medium text-sm">{label}</span>
                         <div className="flex gap-1">
                           {(['O', 'B', 'R'] as const).map((type) => (
                             <button
@@ -665,7 +671,7 @@ export default function App() {
                                 setCurrentEval(next);
                               }}
                               className={`w-8 h-8 rounded-lg font-bold text-xs transition-all ${
-                                val === type 
+                                currentEval[idx] === type 
                                   ? type === 'O' ? 'bg-green-500 text-white' : type === 'B' ? 'bg-blue-500 text-white' : 'bg-orange-500 text-white'
                                   : 'bg-white text-[#86868B] hover:bg-gray-100'
                               }`}
