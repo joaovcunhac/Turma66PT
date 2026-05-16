@@ -1,0 +1,34 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    // Students collection: allow public read/write for now as requested "sem conta"
+    match /students/{studentId} {
+      allow read, write: if true;
+    }
+
+    // Classes collection: allow public read/write
+    match /classes/{classId} {
+      allow read, write: if true;
+    }
+
+    // Audit logs: only authenticated users can create, and only admins should read (but for now let's allow read to all auth)
+    match /audit_logs/{logId} {
+      allow create: if isSignedIn();
+      allow read: if isSignedIn();
+    }
+  }
+}

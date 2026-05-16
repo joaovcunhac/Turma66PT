@@ -1,18 +1,25 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Search, User, Users, Plus, ChevronRight, Star, Calendar, Trash2, ArrowLeft, Save, ClipboardList, UserCheck, Settings, Edit2, X, UserPlus, ShieldCheck, Download, Loader2, HelpCircle } from 'lucide-react';
+import { Search, User, Users, Plus, ChevronRight, Star, Calendar, Trash2, ArrowLeft, Save, ClipboardList, UserCheck, Settings, Edit2, X, UserPlus, ShieldCheck, Download, Loader2, HelpCircle, LogOut, FileDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Student, Grade, GradingRule, SessionInfo } from './types';
+import { Student, Grade, GradingRule, SessionInfo, AuditLog } from './types';
 import { GRADING_RULES, MOCK_STUDENTS } from './constants';
 import { WelcomeModal } from './components/WelcomeModal';
+import { db, auth, signInAnonymously } from './lib/firebase';
+import { collection, query, onSnapshot, doc, setDoc, updateDoc, deleteDoc, addDoc, serverTimestamp, getDocs, writeBatch } from 'firebase/firestore';
+import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 
 export default function App() {
+  const [user, setUser] = useState<FirebaseUser | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [isGradingModalOpen, setIsGradingModalOpen] = useState(false);
   const [isWelcomeModalOpen, setIsWelcomeModalOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   
   // Session Setup State
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
@@ -30,55 +37,89 @@ export default function App() {
   const [isAddingStudent, setIsAddingStudent] = useState(false);
   const [newStudent, setNewStudent] = useState({ name: '', registration: '', pairId: '' });
 
-  // Load students from backend
+  // Firebase Auth and Students Sync
   useEffect(() => {
-    const hasSeenWelcome = localStorage.getItem('hasSeenWelcome');
-    if (!hasSeenWelcome) {
-      setIsWelcomeModalOpen(true);
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setIsLoading(false);
+    });
+
+    const unsubscribeStudents = onSnapshot(collection(db, 'students'), (snapshot) => {
+      const studentsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Student[];
+      setStudents(studentsData);
+      setIsLoading(false);
+    }, (err) => {
+      console.error('Firestore Error:', err);
+      setError('Erro ao sincronizar dados com o servidor.');
+      setIsLoading(false);
+    });
+
+    try {
+      const hasSeenWelcome = localStorage.getItem('hasSeenWelcome');
+      if (!hasSeenWelcome) {
+        setIsWelcomeModalOpen(true);
+      }
+    } catch (e) {
+      console.warn('LocalStorage not available:', e);
     }
 
-    const fetchStudents = async () => {
-      try {
-        const response = await fetch('/api/students');
-        const data = await response.json();
-        // If empty, use mock data and save it
-        if (data.length === 0) {
-          setStudents(MOCK_STUDENTS);
-          await fetch('/api/students', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(MOCK_STUDENTS)
-          });
-        } else {
-          setStudents(data);
-        }
-      } catch (error) {
-        console.error('Failed to fetch students:', error);
-        setStudents(MOCK_STUDENTS);
-      } finally {
-        setIsLoading(false);
-      }
+    return () => {
+      unsubscribeAuth();
+      unsubscribeStudents();
     };
-    fetchStudents();
   }, []);
 
-  // Auto-save students to backend
+  // Seed initial data if database is empty - only if truly empty
   useEffect(() => {
-    if (isLoading) return;
-    const saveStudents = async () => {
-      try {
-        await fetch('/api/students', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(students)
-        });
-      } catch (error) {
-        console.error('Failed to save students:', error);
-      }
-    };
-    const timeoutId = setTimeout(saveStudents, 1000);
-    return () => clearTimeout(timeoutId);
-  }, [students, isLoading]);
+    if (students.length === 0 && !isLoading) {
+      // Small timeout to ensure no race conditions with data loading
+      const timeout = setTimeout(() => {
+        if (students.length === 0) seedInitialData();
+      }, 2000);
+      return () => clearTimeout(timeout);
+    }
+  }, [students.length, isLoading]);
+
+  const seedInitialData = async () => {
+    try {
+      const batch = writeBatch(db);
+      MOCK_STUDENTS.forEach((student) => {
+        const docRef = doc(db, 'students', student.id);
+        batch.set(docRef, student);
+      });
+      await batch.commit();
+      setSuccess('Dados iniciais carregados com sucesso.');
+    } catch (err) {
+      console.error('Failed to seed data:', err);
+    }
+  };
+
+  const logAudit = async (action: AuditLog['action'], student: Student, details: any) => {
+    if (!user) return;
+    try {
+      await addDoc(collection(db, 'audit_logs'), {
+        timestamp: new Date().toISOString(),
+        userId: user.uid,
+        userEmail: user.email || 'unknown',
+        studentId: student.id,
+        studentName: student.name,
+        action,
+        details
+      });
+    } catch (err) {
+      console.error('Audit Log Error:', err);
+    }
+  };
+
+  const showSuccess = (msg: string) => {
+    setSuccess(msg);
+    setTimeout(() => setSuccess(null), 3000);
+  };
+
+  const showError = (msg: string) => {
+    setError(msg);
+    setTimeout(() => setError(null), 5000);
+  };
 
   const filteredStudents = useMemo(() => {
     return students.filter(s => 
@@ -136,8 +177,9 @@ export default function App() {
     }
   };
 
-  const handleSaveGrade = () => {
-    if (!selectedStudentId) return;
+  const handleSaveGrade = async () => {
+    if (!selectedStudentId || !selectedStudent) return;
+    setIsSaving(true);
     
     // Format manual date to pt-BR
     const [year, month, day] = manualDate.split('-');
@@ -147,63 +189,104 @@ export default function App() {
     const fullDate = `${formattedDate} ${time}`;
     const newGrade = currentCalculatedGrade;
 
-    setStudents(prev => prev.map(s => {
-      // Update selected student
-      if (s.id === selectedStudentId) {
-        return {
-          ...s,
-          grades: { ...s.grades, [fullDate]: newGrade }
-        };
-      }
+    try {
+      const studentDocRef = doc(db, 'students', selectedStudentId);
+      const updatedGrades = { ...selectedStudent.grades, [fullDate]: newGrade };
+      await updateDoc(studentDocRef, { grades: updatedGrades });
+      
+      await logAudit('create_grade', selectedStudent, { date: fullDate, grade: newGrade });
+
       // Sync with pair
-      if (selectedStudent?.pairId && s.id === selectedStudent.pairId) {
-        return {
-          ...s,
-          grades: { ...s.grades, [fullDate]: newGrade }
-        };
+      if (selectedStudent.pairId) {
+        const pairDocRef = doc(db, 'students', selectedStudent.pairId);
+        const pair = students.find(s => s.id === selectedStudent.pairId);
+        if (pair) {
+          const pairGrades = { ...pair.grades, [fullDate]: newGrade };
+          await updateDoc(pairDocRef, { grades: pairGrades });
+          await logAudit('create_grade', pair, { date: fullDate, grade: newGrade, syncedFrom: selectedStudentId });
+        }
       }
-      return s;
-    }));
 
-    setIsGradingModalOpen(false);
-    setProcedure('');
-    setObservations('');
-    setManualDate(new Date().toISOString().split('T')[0]);
-    setCurrentEval(Array(5).fill('O'));
+      showSuccess('Avaliação salva com sucesso!');
+      setIsGradingModalOpen(false);
+      setProcedure('');
+      setObservations('');
+      setManualDate(new Date().toISOString().split('T')[0]);
+      setCurrentEval(Array(5).fill('O'));
+    } catch (err) {
+      console.error('Failed to save grade:', err);
+      showError('Erro ao salvar avaliação.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const removeGrade = (date: string) => {
-    setStudents(prev => prev.map(s => {
-      if (s.id === selectedStudentId || (selectedStudent?.pairId && s.id === selectedStudent.pairId)) {
-        const newGrades = { ...s.grades };
-        delete newGrades[date];
-        return { ...s, grades: newGrades };
+  const removeGrade = async (date: string) => {
+    if (!selectedStudentId || !selectedStudent) return;
+    if (!window.confirm('Tem certeza que deseja excluir esta avaliação?')) return;
+    
+    try {
+      const studentDocRef = doc(db, 'students', selectedStudentId);
+      const newGrades = { ...selectedStudent.grades };
+      delete newGrades[date];
+      await updateDoc(studentDocRef, { grades: newGrades });
+      await logAudit('delete_grade', selectedStudent, { date });
+
+      if (selectedStudent.pairId) {
+        const pairDocRef = doc(db, 'students', selectedStudent.pairId);
+        const pair = students.find(s => s.id === selectedStudent.pairId);
+        if (pair) {
+          const pairGrades = { ...pair.grades };
+          delete pairGrades[date];
+          await updateDoc(pairDocRef, { grades: pairGrades });
+          await logAudit('delete_grade', pair, { date, syncedFrom: selectedStudentId });
+        }
       }
-      return s;
-    }));
+      showSuccess('Avaliação removida.');
+    } catch (err) {
+      console.error('Failed to remove grade:', err);
+      showError('Erro ao remover avaliação.');
+    }
   };
 
-  const handleAdminUpdateStudent = () => {
+  const handleAdminUpdateStudent = async () => {
     if (!editingStudent) return;
-    setStudents(prev => prev.map(s => s.id === editingStudent.id ? editingStudent : s));
-    setEditingStudent(null);
+    try {
+      const docRef = doc(db, 'students', editingStudent.id);
+      await setDoc(docRef, editingStudent);
+      await logAudit('update_student', editingStudent, { fields: Object.keys(editingStudent) });
+      showSuccess('Aluno atualizado.');
+      setEditingStudent(null);
+    } catch (err) {
+      showError('Erro ao atualizar aluno.');
+    }
   };
 
-  const handleAdminUpdateGrade = () => {
-    if (!editingGrade || !selectedStudentId) return;
-    setStudents(prev => prev.map(s => {
-      if (s.id === selectedStudentId || (selectedStudent?.pairId && s.id === selectedStudent.pairId)) {
-        return {
-          ...s,
-          grades: { ...s.grades, [editingGrade.date]: editingGrade.grade }
-        };
+  const handleAdminUpdateGrade = async () => {
+    if (!editingGrade || !selectedStudentId || !selectedStudent) return;
+    try {
+      const studentDocRef = doc(db, 'students', selectedStudentId);
+      const updatedGrades = { ...selectedStudent.grades, [editingGrade.date]: editingGrade.grade };
+      await updateDoc(studentDocRef, { grades: updatedGrades });
+      await logAudit('update_grade', selectedStudent, { date: editingGrade.date, grade: editingGrade.grade });
+
+      if (selectedStudent.pairId) {
+        const pairDocRef = doc(db, 'students', selectedStudent.pairId);
+        const pair = students.find(s => s.id === selectedStudent.pairId);
+        if (pair) {
+          const pairGrades = { ...pair.grades, [editingGrade.date]: editingGrade.grade };
+          await updateDoc(pairDocRef, { grades: pairGrades });
+          await logAudit('update_grade', pair, { date: editingGrade.date, grade: editingGrade.grade, syncedFrom: selectedStudentId });
+        }
       }
-      return s;
-    }));
-    setEditingGrade(null);
+      showSuccess('Avaliação atualizada.');
+      setEditingGrade(null);
+    } catch (err) {
+      showError('Erro ao atualizar avaliação.');
+    }
   };
 
-  const handleAddStudent = () => {
+  const handleAddStudent = async () => {
     const id = Math.random().toString(36).substr(2, 9);
     const student: Student = {
       id,
@@ -212,16 +295,61 @@ export default function App() {
       pairId: newStudent.pairId || undefined,
       grades: {}
     };
-    setStudents(prev => [...prev, student]);
-    setIsAddingStudent(false);
-    setNewStudent({ name: '', registration: '', pairId: '' });
+    try {
+      await setDoc(doc(db, 'students', id), student);
+      showSuccess('Aluno adicionado.');
+      setIsAddingStudent(false);
+      setNewStudent({ name: '', registration: '', pairId: '' });
+    } catch (err) {
+      showError('Erro ao adicionar aluno.');
+    }
   };
 
-  const handleDeleteStudent = (id: string) => {
+  const handleDeleteStudent = async (id: string) => {
     if (window.confirm('Tem certeza que deseja excluir este aluno?')) {
-      setStudents(prev => prev.filter(s => s.id !== id));
-      if (selectedStudentId === id) setSelectedStudentId(null);
+      try {
+        await deleteDoc(doc(db, 'students', id));
+        showSuccess('Aluno excluído.');
+        if (selectedStudentId === id) setSelectedStudentId(null);
+      } catch (err) {
+        showError('Erro ao excluir aluno.');
+      }
     }
+  };
+
+  const exportToCSV = () => {
+    const headers = ['Matrícula', 'Nome', 'Data', 'O', 'B', 'R', 'Nota Final', 'Procedimento', 'Professor', 'Pós-Graduação', 'Observações'];
+    const rows: string[][] = [];
+
+    students.forEach(student => {
+      Object.entries(student.grades).forEach(([date, gradeData]) => {
+        const grade = gradeData as Grade;
+        rows.push([
+          student.registration,
+          student.name,
+          date,
+          grade.otimo.toString(),
+          grade.bom.toString(),
+          grade.regular.toString(),
+          grade.finalGrade.toString(),
+          (grade.procedure || '').replace(/,/g, ';'),
+          (grade.professor || '').replace(/,/g, ';'),
+          (grade.postgradStudents || '').replace(/,/g, ';'),
+          (grade.observations || '').replace(/,/g, ';')
+        ]);
+      });
+    });
+
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `notas_protese_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const downloadBackup = () => {
@@ -238,7 +366,11 @@ export default function App() {
 
   const closeWelcomeModal = () => {
     setIsWelcomeModalOpen(false);
-    localStorage.setItem('hasSeenWelcome', 'true');
+    try {
+      localStorage.setItem('hasSeenWelcome', 'true');
+    } catch (e) {
+      console.warn('Could not save to localStorage:', e);
+    }
   };
 
   if (isLoading) {
@@ -246,7 +378,7 @@ export default function App() {
       <div className="min-h-screen flex items-center justify-center bg-[#F5F5F7]">
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="w-12 h-12 text-[#0071E3] animate-spin" />
-          <p className="text-[#86868B] font-medium">Carregando dados...</p>
+          <p className="text-[#86868B] font-medium">Carregando sistema...</p>
         </div>
       </div>
     );
@@ -261,6 +393,14 @@ export default function App() {
           className="mac-card w-full max-w-md p-8 shadow-2xl"
         >
           <div className="flex flex-col items-center mb-8">
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-6 px-4 py-1.5 bg-white rounded-full border border-gray-100 shadow-sm flex items-center gap-2"
+            >
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em]">Created by</span>
+              <span className="text-sm font-black text-[#1D1D1F] tracking-tight">@joaovictorcunhac</span>
+            </motion.div>
             <div className="w-20 h-20 bg-[#0071E3] rounded-2xl flex items-center justify-center text-white shadow-lg mb-4">
               <ClipboardList size={40} />
             </div>
@@ -316,12 +456,42 @@ export default function App() {
 
   return (
     <div className="min-h-screen p-4 md:p-8 max-w-6xl mx-auto flex flex-col">
+      {/* Notifications */}
+      <AnimatePresence>
+        {success && (
+          <motion.div 
+            initial={{ opacity: 0, y: -50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -50 }}
+            className="fixed top-4 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 bg-green-500 text-white rounded-full shadow-lg flex items-center gap-2"
+          >
+            <UserCheck size={18} />
+            {success}
+          </motion.div>
+        )}
+        {error && (
+          <motion.div 
+            initial={{ opacity: 0, y: -50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -50 }}
+            className="fixed top-4 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 bg-red-500 text-white rounded-full shadow-lg flex items-center gap-2"
+          >
+            <X size={18} />
+            {error}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="flex-1">
         {/* Header */}
         <header className="mb-8 flex flex-col md:flex-row md:items-start justify-between gap-6">
         <div className="flex-1">
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-3xl font-bold tracking-tight text-[#1D1D1F]">Prótese Total Turma 66</h1>
+            <div className="hidden sm:flex items-center gap-2 px-2 py-1 bg-white rounded-full border border-gray-100 shadow-sm">
+              <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest">By</span>
+              <span className="text-[10px] font-black text-[#1D1D1F]">@joaovictorcunhac</span>
+            </div>
             <button 
               onClick={() => {
                 setSessionInfo(null);
@@ -338,6 +508,13 @@ export default function App() {
               title="Instruções de Uso"
             >
               <HelpCircle size={18} />
+            </button>
+            <button 
+              onClick={exportToCSV}
+              className="p-1.5 hover:bg-gray-200 rounded-lg text-[#0071E3] transition-colors"
+              title="Exportar CSV"
+            >
+              <FileDown size={18} />
             </button>
             {isAdmin && (
               <div className="flex items-center gap-2">
@@ -741,10 +918,11 @@ export default function App() {
                   </button>
                   <button 
                     onClick={handleSaveGrade}
-                    className="mac-button-primary flex-1 flex items-center justify-center gap-2"
+                    disabled={isSaving}
+                    className="mac-button-primary flex-1 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <Save size={18} />
-                    Salvar Nota
+                    {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save size={18} />}
+                    {isSaving ? 'Salvando...' : 'Salvar Nota'}
                   </button>
                 </div>
               </div>

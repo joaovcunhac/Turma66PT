@@ -1,0 +1,56 @@
+{
+  "entities": {
+    "student": {
+      "title": "Student",
+      "description": "An undergraduate student being graded.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "registration": { "type": "string" },
+        "pairId": { "type": "string" },
+        "classId": { "type": "string" },
+        "grades": { "type": "object" }
+      },
+      "required": ["id", "name", "registration"]
+    },
+    "class": {
+      "title": "Class",
+      "description": "A group of students (Turma).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "year": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "audit_log": {
+      "title": "Audit Log",
+      "description": "History of changes made to student grades.",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time" },
+        "userId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "action": { "type": "string", "enum": ["create_grade", "update_grade", "delete_grade", "update_student", "delete_student"] },
+        "details": { "type": "object" }
+      },
+      "required": ["timestamp", "userId", "studentId", "action"]
+    }
+  },
+  "firestore": {
+    "students": {
+      "schema": "student",
+      "description": "Collection of undergraduate students."
+    },
+    "classes": {
+      "schema": "class",
+      "description": "Collection of classes/turmas."
+    },
+    "audit_logs": {
+      "schema": "audit_log",
+      "description": "History of all modifications."
+    }
+  }
+}
